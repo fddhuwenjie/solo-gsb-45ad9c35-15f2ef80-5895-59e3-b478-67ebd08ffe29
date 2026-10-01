@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>水质异常替代水源方案</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/switch.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🚰</span>
+    <div>
+      <h1>水质异常替代水源方案</h1>
+      <p class="subtitle">灌溉时刻不变 · 状态边界切分 · 日供水上限 / 同源并发 / 切换耗时约束</p>
+    </div>
+  </div>
+  <div class="top-actions">
+    <nav class="page-tabs">
+      <a class="btn" href="/">💧 轮灌编排台</a>
+      <a class="btn" href="/water">🧪 水质监测</a>
+      <a class="btn primary" href="/switch">🚰 水源切换</a>
+      <a class="btn" href="/disease">🔬 病害追踪</a>
+      <a class="btn" href="/heat">🌡️ 积温预测</a>
+      <a class="btn" href="/drip">💧 滴灌巡检</a>
+      <a class="btn" href="/fertilizer">⚗️ 母液分罐</a>
+      <a class="btn" href="/verify">✅ 执行核验</a>
+    </nav>
+    <label class="date-box">计划日期
+      <input type="date" id="plan-date">
+    </label>
+    <button class="btn primary" id="btn-recalc">🔄 重新核算</button>
+    <button class="btn" id="btn-save">💾 保存方案</button>
+    <button class="btn" id="btn-export">⬇ 导出 JSON</button>
+  </div>
+</header>
+
+<main class="switch-layout">
+  <!-- 左侧：水源容量配置 + 阀门可用水源/切换耗时 -->
+  <aside class="sidebar">
+    <section class="card">
+      <h2>水源容量 <small>日供水上限 / 同源并发</small></h2>
+      <ul class="entity-list" id="source-list"></ul>
+      <p class="form-hint">
+        日供水上限留空表示不限（0 = 当日不可供水）；同源并发为同一时刻最多几个阀门共用该水源。
+        修改后立即重新核算。
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>阀门可用水源 <small>切换耗时（分钟）</small></h2>
+      <div id="valve-config"></div>
+      <p class="form-hint">
+        为阀门登记当日可切换的水源及切换耗时；当前绑定水源隐含可用（耗时 0）。
+        切换只能发生在两次灌溉运行之间，间隔须不小于目标水源的切换耗时；
+        运行中途（含首尾相接、间隔 0）不能换源。
+      </p>
+    </section>
+  </aside>
+
+  <!-- 右侧：方案总览 + 时间轴 + 明细 -->
+  <section class="main-panel">
+    <div class="card">
+      <div class="result-head">
+        <div class="verdict" id="verdict-badge">—</div>
+        <div class="saved-state" id="saved-state"></div>
+      </div>
+      <div class="trace-summary" id="summary-chips"></div>
+      <p class="form-hint" id="objective-hint">
+        目标：先最小化「风险 + 证据不足」水量，再最小化切换次数。
+      </p>
+    </div>
+
+    <div class="card conflict-card hidden" id="conflict-card">
+      <h2>无解：未覆盖水量与冲突原因</h2>
+      <div id="conflict-list"></div>
+    </div>
+
+    <div class="card">
+      <h2>阀门方案时间轴 <small>色块 = 一次灌溉运行；切换发生在运行之间</small></h2>
+      <div id="timeline"></div>
+      <div class="legend" id="timeline-legend"></div>
+    </div>
+
+    <div class="card">
+      <h2>运行组明细</h2>
+      <div class="table-wrap">
+        <table class="trace-table">
+          <thead>
+            <tr>
+              <th>阀门</th><th>分区</th><th>时段</th><th>水源</th><th>结论</th>
+              <th>水量 (L)</th><th>距上次间隔</th><th>切换耗时</th>
+            </tr>
+          </thead>
+          <tbody id="group-rows"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>水源占用 <small>日供水上限 / 同源并发</small></h2>
+      <div class="table-wrap">
+        <table class="sample-table">
+          <thead>
+            <tr>
+              <th>水源</th><th>已用水量 (L)</th><th>日供水上限 (L)</th>
+              <th>剩余 (L)</th><th>同源并发上限</th>
+            </tr>
+          </thead>
+          <tbody id="source-rows"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>分区水量汇总</h2>
+      <div class="table-wrap">
+        <table class="trace-table">
+          <thead>
+            <tr>
+              <th>分区</th><th>结论</th><th>风险 (L)</th><th>待复核 (L)</th>
+              <th>证据不足 (L)</th><th>未覆盖 (L)</th><th>正常 (L)</th><th>用水源</th>
+            </tr>
+          </thead>
+          <tbody id="zone-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+<script src="/switch.js"></script>
+</body>
+</html>
