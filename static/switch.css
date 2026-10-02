@@ -1,0 +1,99 @@
+/* 替代水源方案页（复用 style.css / water.css 的变量与徽章） */
+
+.switch-layout {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 16px;
+  padding: 16px 20px;
+  align-items: start;
+}
+@media (max-width: 980px) {
+  .switch-layout { grid-template-columns: 1fr; }
+}
+
+/* ---------- 水源容量卡 ---------- */
+.cap-card {
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; margin-bottom: 8px; background: #fafcf9;
+}
+.cap-head { display: flex; align-items: center; gap: 8px; }
+.cap-head .name { font-weight: 600; font-size: 13px; flex: 1; }
+.cap-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.cap-fields label { font-size: 11px; color: var(--ink-soft); display: flex; flex-direction: column; gap: 2px; }
+.cap-fields input {
+  font: inherit; padding: 5px 7px; border: 1px solid var(--line);
+  border-radius: 6px; width: 100%;
+}
+.cap-bar { height: 6px; border-radius: 999px; background: #e7ede6; margin-top: 8px; overflow: hidden; }
+.cap-bar > i { display: block; height: 100%; background: var(--green); }
+.cap-bar.over > i { background: var(--red); }
+.cap-meta { font-size: 11px; color: var(--ink-soft); margin-top: 4px; }
+
+/* ---------- 阀门水源编辑器 ---------- */
+.valve-card { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; background: #fafcf9; }
+.valve-card .vname { font-weight: 600; font-size: 13px; margin-bottom: 6px; display: flex; justify-content: space-between; gap: 6px; }
+.valve-card .vname small { font-weight: 400; color: var(--ink-soft); }
+.reg-row { display: grid; grid-template-columns: 1fr 86px auto; gap: 6px; align-items: center; margin-bottom: 6px; }
+.reg-row select, .reg-row input {
+  font: inherit; font-size: 12px; padding: 5px 6px;
+  border: 1px solid var(--line); border-radius: 6px; background: #fff; width: 100%;
+}
+.reg-row .sw-wrap { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--ink-soft); }
+.reg-row .sw-wrap input { text-align: right; }
+.icon-btn {
+  border: 1px solid var(--line); background: #fff; border-radius: 6px;
+  cursor: pointer; padding: 3px 7px; font-size: 13px; line-height: 1;
+}
+.icon-btn:hover { border-color: var(--red); color: var(--red); }
+.icon-btn.add:hover { border-color: var(--green); color: var(--green-dark); }
+.valve-card .add-row { margin-top: 2px; }
+.empty-reg { font-size: 11.5px; color: var(--ink-soft); padding: 4px 0; }
+
+/* ---------- 结论条 ---------- */
+.verdict { margin: 10px 0 4px; font-size: 14px; font-weight: 700; padding: 10px 14px; border-radius: 8px; }
+.verdict.ok  { background: #e6f4e6; color: var(--green-dark); border: 1px solid #b8dabb; }
+.verdict.bad { background: var(--red-bg); color: var(--red); border: 1px solid #f0b5af; }
+.objective { font-size: 11.5px; color: var(--ink-soft); margin: 2px 0 8px; }
+
+/* ---------- 方案表 ---------- */
+.plan-table td { vertical-align: top; }
+.piece-list { display: flex; flex-direction: column; gap: 6px; }
+.piece {
+  display: flex; flex-direction: column; gap: 2px;
+  border-left: 3px solid var(--line); padding: 2px 8px; border-radius: 0 6px 6px 0;
+  background: #fafcf9; font-size: 12px;
+}
+.piece.klass-risk { border-left-color: var(--red); background: #fef7f6; }
+.piece.klass-review { border-left-color: #f59e0b; background: #fffaf0; }
+.piece.klass-safe { border-left-color: var(--green); }
+.piece.klass-insufficient { border-left-color: #9aa4b1; background: #f4f6f9; }
+.piece .p-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.piece .p-src { font-weight: 600; }
+.piece .p-time { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.piece .p-vol { color: var(--ink-soft); }
+.piece .p-ev { font-size: 10.5px; color: var(--ink-soft); }
+
+.switch-cell { font-size: 11.5px; color: var(--ink); display: flex; flex-direction: column; gap: 4px; }
+.switch-chip { background: #eef3fb; border: 1px solid #c4d4ec; color: #2748a0; border-radius: 6px; padding: 3px 7px; }
+.switch-chip.none { background: #f2f4f1; border-color: var(--line); color: var(--ink-soft); }
+.switch-chip em { font-style: normal; color: var(--amber); }
+
+.zone-main { font-weight: 600; }
+.zone-sub { font-size: 11px; color: var(--ink-soft); font-weight: 400; }
+td.vol-cell { font-size: 12px; white-space: nowrap; line-height: 1.7; }
+.vol-cell b.r { color: var(--red); }
+.vol-cell b.w { color: var(--amber); }
+.vol-cell b.g { color: var(--green-dark); }
+.vol-cell b.x { color: #5b6573; }
+
+/* ---------- 用量表 ---------- */
+.usage-bar { width: 120px; height: 8px; border-radius: 999px; background: #e7ede6; overflow: hidden; display: inline-block; vertical-align: middle; }
+.usage-bar > i { display: block; height: 100%; background: var(--green); }
+.usage-bar.over > i { background: var(--red); }
+
+/* ---------- 冲突表 ---------- */
+#conflict-card { border-color: #f0b5af; }
+.reason-list { margin: 0; padding-left: 16px; font-size: 12px; }
+.reason-list li { margin-bottom: 3px; }
+.cand-status { color: var(--ink-soft); font-size: 11px; }
+.saved-tag { font-size: 11px; color: var(--green-dark); background:#e6f4e6; border:1px solid #b8dabb; border-radius:999px; padding:2px 10px; }

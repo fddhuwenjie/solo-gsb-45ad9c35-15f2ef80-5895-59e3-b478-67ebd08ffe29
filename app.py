@@ -10,6 +10,7 @@ from flask import Flask, Response, g, jsonify, request, send_from_directory
 import scheduler
 import water_quality as wq
 import water_trace as wt
+import source_switch as ssol
 import disease_trace as dt
 import crop_heat as ch
 import drip_uniform as dri
@@ -83,7 +84,9 @@ def init_db():
             id      INTEGER PRIMARY KEY AUTOINCREMENT,
             name    TEXT NOT NULL UNIQUE,
             note    TEXT NOT NULL DEFAULT '',
-            created TEXT NOT NULL
+            created TEXT NOT NULL,
+            day_cap_l   REAL NOT NULL DEFAULT 0,
+            same_concur INTEGER NOT NULL DEFAULT 1
         );
         CREATE TABLE IF NOT EXISTS water_ranges (
             source_id INTEGER NOT NULL REFERENCES water_sources(id) ON DELETE CASCADE,
@@ -246,6 +249,20 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_verify_events_batch
             ON verify_events(batch_id, start_min, event_id);
+        CREATE TABLE IF NOT EXISTS valve_sources (
+            valve_id   INTEGER NOT NULL REFERENCES valves(id) ON DELETE CASCADE,
+            source_id  INTEGER NOT NULL REFERENCES water_sources(id) ON DELETE CASCADE,
+            switch_min INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (valve_id, source_id)
+        );
+        CREATE TABLE IF NOT EXISTS switch_plans (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_date     TEXT NOT NULL UNIQUE,
+            payload       TEXT NOT NULL,
+            plan_revision INTEGER,
+            created       TEXT NOT NULL,
+            updated       TEXT NOT NULL
+        );
         """
     )
     _migrate_db(db)
@@ -293,6 +310,11 @@ def _migrate_db(db):
     v4：执行核验——新增 verify_batches / verify_events 两张表
     （CREATE TABLE IF NOT EXISTS 已在建库脚本中幂等创建，
     这里仅把旧库版本号推进到 4）。
+
+    v5：替代水源——water_sources 增加日供水上限 day_cap_l 与同源并发
+    same_concur；valve_sources（阀门可用水源 + 切换耗时）与
+    switch_plans（已保存方案）两张新表由建库脚本幂等创建，
+    这里仅为旧库补列并推进版本号。
     """
     version = db.execute("PRAGMA user_version").fetchone()[0]
     if version < 1:
@@ -369,6 +391,18 @@ def _migrate_db(db):
 
     # v4：执行核验两张表由建库脚本 IF NOT EXISTS 幂等创建，仅推进版本号。
     db.execute("PRAGMA user_version = 4")
+    db.commit()
+
+    # v5：替代水源——旧库补水源容量两列（默认 0 / 1），两张新表已由
+    # 建库脚本幂等创建。
+    cols = [r["name"] for r in db.execute("PRAGMA table_info(water_sources)")]
+    if "day_cap_l" not in cols:
+        db.execute("ALTER TABLE water_sources ADD COLUMN day_cap_l"
+                   " REAL NOT NULL DEFAULT 0")
+    if "same_concur" not in cols:
+        db.execute("ALTER TABLE water_sources ADD COLUMN same_concur"
+                   " INTEGER NOT NULL DEFAULT 1")
+    db.execute("PRAGMA user_version = 5")
     db.commit()
 
 
@@ -453,7 +487,12 @@ def _seed_schedule(db):
 # ---------------------------------------------------------------- 水质示例数据
 
 def _seed_water(db):
-    """两个示例水源：机井水质硝酸盐连续超标；集雨水池水浊度处于观察。"""
+    """两个示例水源：机井水质硝酸盐连续超标；集雨水池水浊度观察后恢复正常。
+
+    容量配置（供「替代水源」开箱演示）：机井日供水上限 8000 L / 同源并发 2，
+    雨水池 5000 L / 同源并发 2。雨水池在 13:00 连续两次回到浊度区间内 ->
+    当日下午恢复正常，使晚间黄瓜区可切到雨水池且不产生风险 / 待复核水量。
+    """
     now = datetime.now().replace(microsecond=0)
 
     def iso(days_ago, hhmm):
@@ -461,8 +500,9 @@ def _seed_water(db):
         t = (now - timedelta(days=days_ago)).replace(hour=h, minute=m, second=0)
         return t.isoformat()
 
+    # 名称, 备注, 日供水上限(L), 同源并发, 采样
     seeds = [
-        ("1# 机井水", "泵房北侧深水井", [
+        ("1# 机井水", "泵房北侧深水井", 8000, 2, [
             # days_ago, 时间, pH,  EC,   浊度, 硝酸盐
             (2, "08:00", 7.2, 1.10, 2.1, 18.0),
             (2, "14:00", 7.3, 1.15, 2.4, 22.0),
@@ -471,17 +511,21 @@ def _seed_water(db):
             (0, "08:00", 7.1, 1.18, 2.5, 35.0),
             (0, "09:00", 7.2, 1.16, 2.3, 33.0),  # 仍超标
         ]),
-        ("雨水收集池", "温室南侧集雨沉淀池", [
+        ("雨水收集池", "温室南侧集雨沉淀池", 5000, 2, [
             (1, "07:30", 7.8, 0.40, 5.0, 6.0),
             (1, "13:30", 7.9, 0.45, 12.0, 7.5),  # 浊度首次越界 -> 观察
             (0, "07:30", 7.7, 0.42, 8.0, 6.5),   # 回到区间，仅 1 次 -> 观察
+            (0, "13:00", 7.7, 0.42, 7.0, 6.5),   # 连续两次回区间 -> 恢复正常
         ]),
     ]
-    for name, note, rows in seeds:
+    source_id_by_name = {}
+    for name, note, day_cap, same_concur, rows in seeds:
         cur = db.execute(
-            "INSERT INTO water_sources(name,note,created) VALUES(?,?,?)",
-            (name, note, now.isoformat()))
+            "INSERT INTO water_sources(name,note,created,day_cap_l,same_concur)"
+            " VALUES(?,?,?,?,?)",
+            (name, note, now.isoformat(), day_cap, same_concur))
         sid = cur.lastrowid
+        source_id_by_name[name] = sid
         for key in wq.METRIC_KEYS:
             lo, hi = wq.METRICS[key][2], wq.METRICS[key][3]
             db.execute(
@@ -492,6 +536,26 @@ def _seed_water(db):
                 "INSERT INTO water_samples(source_id,ts,ph,ec,turbidity,nitrate)"
                 " VALUES(?,?,?,?,?,?)",
                 (sid, iso(days_ago, hhmm), ph, ec, turb, nitrate))
+
+    # 阀门可用水源登记（含切换耗时，分钟）：
+    # 两条干管可在机井 / 雨水池间切换；苗床支管仅登记雨水池。
+    valve_switch = {
+        "北侧干管": [("1# 机井水", 0), ("雨水收集池", 30)],
+        "中部干管": [("1# 机井水", 0), ("雨水收集池", 20)],
+        "苗床支管": [("雨水收集池", 15)],
+    }
+    for valve_name, lst in valve_switch.items():
+        vrow = db.execute("SELECT id FROM valves WHERE name=?",
+                          (valve_name,)).fetchone()
+        if vrow is None:
+            continue
+        for sname, sw in lst:
+            sid = source_id_by_name.get(sname)
+            if sid is None:
+                continue
+            db.execute(
+                "INSERT OR IGNORE INTO valve_sources(valve_id,source_id,switch_min)"
+                " VALUES(?,?,?)", (vrow["id"], sid, sw))
     db.commit()
 
 
@@ -1203,6 +1267,7 @@ def api_reset():
         "DELETE FROM fertilizer_pairs; DELETE FROM fertilizer_items; "
         "DELETE FROM fertilizer_recipes; "
         "DELETE FROM heat_readings; DELETE FROM heat_batches; "
+        "DELETE FROM switch_plans; DELETE FROM valve_sources; "
         "DELETE FROM schedule_items; "
         # 全量重置轮灌对象：病害 / 水质历史保留，仅解除事件对旧分区的外键引用
         # （disease_events.zone_id 为 RESTRICT，直接删 zones 会触发外键约束）
@@ -1236,6 +1301,31 @@ def api_reset():
 
 
 # ---------------------------------------------------------------- API: 阀门
+
+def _parse_source_capacity(data):
+    """解析水源的日供水上限与同源并发上限（缺省沿用 0 / 1）。"""
+    raw_cap = data.get("day_cap_l", 0)
+    if raw_cap in (None, ""):
+        raw_cap = 0
+    try:
+        day_cap = float(raw_cap)
+    except (TypeError, ValueError):
+        raise ValueError("日供水上限必须为数字")
+    if day_cap != day_cap or day_cap < 0:
+        raise ValueError("日供水上限不能为负 / NaN")
+    raw_concur = data.get("same_concur", 1)
+    if raw_concur in (None, ""):
+        raw_concur = 1
+    if isinstance(raw_concur, bool):
+        raise ValueError("同源并发上限必须为正整数")
+    try:
+        same_concur = int(raw_concur)
+    except (TypeError, ValueError):
+        raise ValueError("同源并发上限必须为正整数")
+    if same_concur < 1 or float(raw_concur) != same_concur:
+        raise ValueError("同源并发上限必须为正整数")
+    return day_cap, same_concur
+
 
 def _parse_source_id(data, db, keep_if_absent=None):
     """解析阀门水源绑定。
@@ -1527,6 +1617,8 @@ def _source_card(db, row, ranges):
     summary = {
         "id": row["id"], "name": row["name"], "note": row["note"],
         "created": row["created"], "sample_count": len(samples),
+        "day_cap_l": row["day_cap_l"],
+        "same_concur": row["same_concur"],
     }
     if samples:
         last = samples[-1]
@@ -1678,11 +1770,161 @@ def build_water_trace_export(day=None, zone_id=None):
     }
 
 
+# ---------------------------------------------------------------- API: 替代水源
+
+def _valve_source_rows(db):
+    """{valve_id: [{source_id, source_name, switch_min}]}，含未登记的空阀门。"""
+    valves = db.execute("SELECT id FROM valves ORDER BY id").fetchall()
+    out = {v["id"]: [] for v in valves}
+    for r in db.execute(
+            "SELECT vs.valve_id,vs.source_id,vs.switch_min,s.name AS source_name"
+            " FROM valve_sources vs JOIN water_sources s ON s.id=vs.source_id"
+            " ORDER BY vs.valve_id,vs.source_id"):
+        out.setdefault(r["valve_id"], []).append({
+            "source_id": r["source_id"], "source_name": r["source_name"],
+            "switch_min": r["switch_min"]})
+    return out
+
+
+def _source_meta(db):
+    return {r["id"]: {"id": r["id"], "name": r["name"],
+                      "day_cap_l": r["day_cap_l"],
+                      "same_concur": r["same_concur"]}
+            for r in db.execute("SELECT * FROM water_sources ORDER BY id")}
+
+
+def _load_switch_inputs(db, day):
+    """汇总替代水源求解所需的全部只读输入。"""
+    settings = {r["key"]: r["value"]
+                for r in db.execute("SELECT key,value FROM settings")}
+    valves = [valve_dict(r) for r in db.execute("SELECT * FROM valves ORDER BY id")]
+    zones = [dict(id=r["id"], name=r["name"], valve_id=r["valve_id"])
+             for r in db.execute("SELECT id,name,valve_id FROM zones ORDER BY id")]
+    items = [dict(zone_id=r["zone_id"], start_slot=r["start_slot"],
+                  length=r["length"])
+             for r in db.execute(
+                 "SELECT zone_id,start_slot,length FROM schedule_items"
+                 " ORDER BY start_slot,zone_id")]
+
+    source_rows = db.execute("SELECT * FROM water_sources ORDER BY id").fetchall()
+    source_names = {r["id"]: r["name"] for r in source_rows}
+    meta = {r["id"]: {"id": r["id"], "name": r["name"],
+                      "day_cap_l": r["day_cap_l"],
+                      "same_concur": r["same_concur"]} for r in source_rows}
+    samples_by_source = {}
+    ranges_by_source = {}
+    for r in source_rows:
+        sid = r["id"]
+        ranges_by_source[sid] = _ranges_for(db, sid)
+        samples_by_source[sid] = [
+            {k: row[k] for k in
+             ("id", "source_id", "ts", "ph", "ec", "turbidity", "nitrate")}
+            for row in db.execute(
+                "SELECT id,source_id,ts,ph,ec,turbidity,nitrate FROM water_samples"
+                " WHERE source_id=? ORDER BY ts,id", (sid,))]
+
+    valve_sources_raw = {vid: lst for vid, lst in
+                         _valve_source_rows(db).items()}
+    valve_sources = {
+        vid: [{"source_id": x["source_id"], "switch_min": x["switch_min"]}
+              for x in lst]
+        for vid, lst in valve_sources_raw.items()}
+
+    saved = None
+    srow = db.execute(
+        "SELECT * FROM switch_plans WHERE plan_date=?", (day.isoformat(),)
+    ).fetchone()
+    if srow:
+        try:
+            saved = json.loads(srow["payload"])
+        except (TypeError, ValueError):
+            saved = None
+
+    return {
+        "day": day, "settings": settings, "valves": valves, "zones": zones,
+        "items": items, "meta": meta, "source_names": source_names,
+        "samples_by_source": samples_by_source,
+        "ranges_by_source": ranges_by_source,
+        "valve_sources": valve_sources,
+        "valve_sources_full": valve_sources_raw,
+        "saved": saved,
+        "saved_revision": srow["plan_revision"] if srow else None,
+    }
+
+
+def build_switch_plan_state(day=None):
+    """按计划日期重算替代水源方案（纯按需，不自动落库）。"""
+    db = get_db()
+    settings = {r["key"]: r["value"]
+                for r in db.execute("SELECT key,value FROM settings")}
+    day_raw = day or settings.get("plan_date") or date.today().isoformat()
+    day_dt = ssol.parse_day(day_raw)
+
+    inp = _load_switch_inputs(db, day_dt)
+    # 无采样的水源按全天证据不足参与切分
+    segments = ssol.build_source_segments(
+        inp["samples_by_source"], inp["ranges_by_source"], day_dt)
+    for sid in inp["meta"]:
+        segments.setdefault(sid, ssol.insufficient_segments())
+
+    result = ssol.solve(
+        inp["zones"], inp["items"], inp["valves"], segments,
+        ssol.normalize_source_meta(inp["meta"]),
+        ssol.normalize_valve_sources(inp["valve_sources"], set(inp["meta"])),
+        slot_min=scheduler.SLOT_MIN)
+
+    # 未在 valve_sources 登记的阀门也列出（空登记），便于前端展示
+    reg_full = inp["valve_sources_full"]
+    result["date"] = day_dt.isoformat()
+    result["plan_date"] = settings.get("plan_date", "")
+    result["plan_revision"] = int(settings.get("plan_revision", 1))
+    # 附各水源当前水质状态
+    cards = []
+    for r in db.execute("SELECT * FROM water_sources ORDER BY id"):
+        cards.append(_source_card(db, r, _ranges_for(db, r["id"])))
+    status_by_id = {c["id"]: {"status": c["status"], "triggers": c["triggers"]}
+                    for c in cards}
+    for srow in result["sources"]:
+        srow["status"] = status_by_id.get(srow["source_id"], {}).get("status")
+        srow["triggers"] = status_by_id.get(srow["source_id"], {}).get(
+            "triggers", [])
+    result["valve_sources"] = [
+        {"valve_id": v["id"], "valve_name": v["name"],
+         "bound_source_id": v.get("source_id"),
+         "bound_source_name": inp["source_names"].get(v.get("source_id")),
+         "sources": reg_full.get(v["id"], [])}
+        for v in inp["valves"]]
+    result["saved"] = inp["saved"]
+    return result
+
+
+def build_switch_plan_export(day=None):
+    state = build_switch_plan_state(day)
+    return {
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "date": state["date"],
+        "plan_date": state["plan_date"],
+        "plan_revision": state["plan_revision"],
+        "slot_minutes": state["slot_minutes"],
+        "class_labels": state["class_labels"],
+        "summary": state["summary"],
+        "sources": state["sources"],
+        "valve_sources": state["valve_sources"],
+        "zones": state["zones"],
+        "conflicts": state["conflicts"],
+    }
+
+
 # ---------------------------------------------------------------- 页面
 
 @app.route("/water")
 def water_page():
     return send_from_directory(app.static_folder, "water.html")
+
+
+@app.route("/switch")
+def switch_page():
+    return send_from_directory(app.static_folder, "switch.html")
 
 
 # ---------------------------------------------------------------- API: 水源
@@ -1705,11 +1947,17 @@ def api_water_create_source():
     if not name:
         return bad("缺少字段：水源名称")
     note = (data.get("note") or "").strip()
+    try:
+        day_cap, same_concur = _parse_source_capacity(data)
+    except ValueError as e:
+        return bad(str(e))
     db = get_db()
     try:
         cur = db.execute(
-            "INSERT INTO water_sources(name,note,created) VALUES(?,?,?)",
-            (name, note, datetime.now().replace(microsecond=0).isoformat()))
+            "INSERT INTO water_sources(name,note,created,day_cap_l,same_concur)"
+            " VALUES(?,?,?,?,?)",
+            (name, note, datetime.now().replace(microsecond=0).isoformat(),
+             day_cap, same_concur))
         sid = cur.lastrowid
         for key in wq.METRIC_KEYS:
             db.execute(
@@ -1729,12 +1977,18 @@ def api_water_update_source(sid):
     if not name:
         return bad("缺少字段：水源名称")
     note = (data.get("note") or "").strip()
+    try:
+        day_cap, same_concur = _parse_source_capacity(data)
+    except ValueError as e:
+        return bad(str(e))
     db = get_db()
     if not db.execute("SELECT id FROM water_sources WHERE id=?", (sid,)).fetchone():
         return bad("水源不存在", 404)
     try:
-        db.execute("UPDATE water_sources SET name=?,note=? WHERE id=?",
-                   (name, note, sid))
+        db.execute(
+            "UPDATE water_sources SET name=?,note=?,day_cap_l=?,same_concur=?"
+            " WHERE id=?",
+            (name, note, day_cap, same_concur, sid))
         db.commit()
     except sqlite3.IntegrityError:
         return bad("水源名称已存在")
@@ -1871,6 +2125,102 @@ def api_water_export():
     resp.headers["Content-Disposition"] = \
         f"attachment; filename=water-quality.json; filename*=UTF-8''{fname}"
     return resp
+
+
+# ---------------------------------------------------------------- API: 替代水源
+
+@app.get("/api/water/switch-plan")
+def api_water_switch_plan():
+    day = (request.args.get("date") or "").strip() or None
+    try:
+        return jsonify(build_switch_plan_state(day))
+    except ValueError as e:
+        return bad(str(e))
+
+
+@app.get("/api/water/switch-plan/export")
+def api_water_switch_plan_export():
+    day = (request.args.get("date") or "").strip() or None
+    try:
+        payload = build_switch_plan_export(day)
+    except ValueError as e:
+        return bad(str(e))
+    body = json.dumps(payload, ensure_ascii=False, indent=2)
+    tag = payload["date"]
+    fname = f"water-switch-{tag}.json"
+    resp = Response(body, mimetype="application/json; charset=utf-8")
+    resp.headers["Content-Disposition"] = \
+        f"attachment; filename=water-switch.json; filename*=UTF-8''{fname}"
+    return resp
+
+
+@app.put("/api/valves/<int:vid>/sources")
+def api_update_valve_sources(vid):
+    """整表替换某阀门的可用水源登记：[{source_id, switch_min}]。"""
+    data = request.get_json(silent=True) or {}
+    raw_list = data.get("sources")
+    if not isinstance(raw_list, list):
+        return bad("sources 必须为数组")
+    db = get_db()
+    if not db.execute("SELECT id FROM valves WHERE id=?", (vid,)).fetchone():
+        return bad("阀门不存在", 404)
+    source_ids = {r["id"] for r in db.execute("SELECT id FROM water_sources")}
+    try:
+        clean = ssol.normalize_valve_sources({vid: raw_list}, source_ids)[vid]
+    except ValueError as e:
+        return bad(str(e))
+    db.execute("DELETE FROM valve_sources WHERE valve_id=?", (vid,))
+    db.executemany(
+        "INSERT INTO valve_sources(valve_id,source_id,switch_min) VALUES(?,?,?)",
+        [(vid, x["source_id"], x["switch_min"]) for x in clean])
+    db.commit()
+    return jsonify(build_switch_plan_state())
+
+
+@app.post("/api/water/switch-plan/save")
+def api_save_switch_plan():
+    """保存当日方案快照（采样 / 绑定 / 容量 / 登记 / 计划改动后需重算再存）。"""
+    data = request.get_json(silent=True) or {}
+    day = (data.get("date") or "").strip() or None
+    try:
+        state = build_switch_plan_state(day)
+    except ValueError as e:
+        return bad(str(e))
+    db = get_db()
+    now = datetime.now().replace(microsecond=0).isoformat()
+    payload = json.dumps(state, ensure_ascii=False)
+    existing = db.execute(
+        "SELECT id,created FROM switch_plans WHERE plan_date=?",
+        (state["date"],)).fetchone()
+    if existing:
+        db.execute(
+            "UPDATE switch_plans SET payload=?,plan_revision=?,updated=?"
+            " WHERE id=?",
+            (payload, state["plan_revision"], now, existing["id"]))
+    else:
+        db.execute(
+            "INSERT INTO switch_plans(plan_date,payload,plan_revision,created,updated)"
+            " VALUES(?,?,?,?,?)",
+            (state["date"], payload, state["plan_revision"], now, now))
+    db.commit()
+    return jsonify(build_switch_plan_state(day))
+
+
+@app.delete("/api/water/switch-plan")
+def api_delete_switch_plan():
+    day = (request.args.get("date") or "").strip() or None
+    db = get_db()
+    settings = {r["key"]: r["value"]
+                for r in db.execute("SELECT key,value FROM settings")}
+    day_raw = day or settings.get("plan_date") or date.today().isoformat()
+    try:
+        day_dt = ssol.parse_day(day_raw)
+    except ValueError as e:
+        return bad(str(e))
+    db.execute("DELETE FROM switch_plans WHERE plan_date=?",
+               (day_dt.isoformat(),))
+    db.commit()
+    return jsonify(build_switch_plan_state(day_raw))
 
 
 # ---------------------------------------------------------------- API: 病害接触追踪

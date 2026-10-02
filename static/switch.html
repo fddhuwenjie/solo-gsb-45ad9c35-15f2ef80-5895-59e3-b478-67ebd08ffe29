@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>水质异常替代水源方案</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/water.css">
+<link rel="stylesheet" href="/switch.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🚰</span>
+    <div>
+      <h1>水质异常替代水源方案</h1>
+      <p class="subtitle">灌溉时刻不变 · 在水质状态边界切分子段 · 满足容量 / 同源并发 / 切换耗时</p>
+    </div>
+  </div>
+  <div class="top-actions">
+    <nav class="page-tabs">
+      <a class="btn" href="/">💧 轮灌编排台</a>
+      <a class="btn" href="/water">🧪 水质监测</a>
+      <a class="btn primary" href="/switch">🚰 替代水源</a>
+      <a class="btn" href="/disease">🔬 病害追踪</a>
+      <a class="btn" href="/heat">🌡️ 积温预测</a>
+      <a class="btn" href="/drip">💧 滴灌巡检</a>
+      <a class="btn" href="/fertilizer">⚗️ 母液分罐</a>
+      <a class="btn" href="/verify">✅ 执行核验</a>
+    </nav>
+    <button class="btn" id="btn-export">⬇ 导出方案 JSON</button>
+  </div>
+</header>
+
+<main class="switch-layout">
+  <!-- 左侧：水源容量 -->
+  <aside class="sidebar">
+    <section class="card">
+      <h2>水源容量配置 <small>日供水上限 / 同源并发</small></h2>
+      <ul class="entity-list" id="source-cap-list"></ul>
+      <p class="form-hint">修改容量后右侧方案立即重算。状态取自水质监测的「连续两次」判定。</p>
+    </section>
+
+    <section class="card">
+      <h2>阀门可用水源 <small>登记替代水源 + 切换耗时</small></h2>
+      <div id="valve-source-editor"></div>
+      <p class="form-hint">每个阀门可登记若干水源及切换耗时（分钟）：从别的水源切到该水源前，阀门须空闲满该时长。未出现在登记中的水源不可用于该阀门。</p>
+    </section>
+  </aside>
+
+  <!-- 右侧：方案 -->
+  <section class="main-panel">
+    <div class="card trace-card">
+      <div class="trace-head">
+        <h2>当日替代方案 <small>沿用 15 分钟计划时刻，只改各子段水源</small></h2>
+        <div class="filters">
+          <label>计划日期
+            <input type="date" id="plan-date">
+          </label>
+          <button class="btn small ghost" id="btn-recalc">重新核算</button>
+          <button class="btn small primary" id="btn-save">💾 保存方案</button>
+          <button class="btn small" id="btn-export2">⬇ 导出 JSON</button>
+        </div>
+      </div>
+
+      <div class="verdict" id="verdict"></div>
+      <div class="trace-summary" id="summary-chips"></div>
+      <div class="objective" id="objective"></div>
+
+      <div class="table-wrap">
+        <table class="trace-table plan-table">
+          <thead>
+            <tr>
+              <th>分区（灌溉时段）</th>
+              <th>方案子段（水源 · 时段 · 水量 · 水质）</th>
+              <th>边界切换</th>
+              <th>覆盖 / 风险 / 待复核</th>
+            </tr>
+          </thead>
+          <tbody id="plan-rows"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>水源用量核算 <small>日供水上限 / 峰值同源并发</small></h2>
+      <div class="table-wrap">
+        <table class="trace-table">
+          <thead>
+            <tr><th>水源</th><th>当前水质</th><th>已用 / 日上限</th>
+            <th>剩余</th><th>峰值同源并发</th></tr>
+          </thead>
+          <tbody id="source-usage-rows"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" id="conflict-card" hidden>
+      <h2>未覆盖水量与冲突原因 <small>硬约束放不下的子段</small></h2>
+      <div class="table-wrap">
+        <table class="trace-table">
+          <thead>
+            <tr><th>分区</th><th>时段</th><th>未覆盖水量</th><th>冲突原因</th></tr>
+          </thead>
+          <tbody id="conflict-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+<script src="/switch.js"></script>
+</body>
+</html>
